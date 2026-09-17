@@ -1,6 +1,7 @@
 {
   "functions": {
     "api/tts.js": { "maxDuration": 15 },
-    "api/health.js": { "maxDuration": 5 }
+    "api/health.js": { "maxDuration": 5 },
+    "api/voices.js": { "maxDuration": 8 }
   }
 }
