@@ -21,9 +21,15 @@ module.exports = async function handler(req, res) {
       headers: { 'xi-api-key': apiKey, 'Accept': 'application/json' }
     });
     if (!upstream.ok) {
-      const detail = await upstream.text().catch(() => '');
-      console.error('ElevenLabs voices error', upstream.status, detail.slice(0, 300));
-      return res.status(502).json({ error: 'voices_upstream_error', status: upstream.status });
+      const detailText = await upstream.text().catch(() => '');
+      let detail = detailText;
+      try { detail = JSON.parse(detailText); } catch {}
+      console.error('ElevenLabs voices error', upstream.status, detailText.slice(0, 500));
+      return res.status(502).json({
+        error: 'voices_upstream_error',
+        status: upstream.status,
+        detail
+      });
     }
     const data = await upstream.json();
     const voices = (data.voices || []).map(v => ({
