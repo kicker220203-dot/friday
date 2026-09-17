@@ -1,12 +1,14 @@
 {
-  "version": "v0.6.1-voice",
-  "build": "061voice",
-  "stage": "neural-voice",
+  "version": "v0.7-ai",
+  "build": "07ai",
+  "stage": "ai-conversation",
   "voice_provider": "elevenlabs",
   "voice_backend": "https://friday-uocw.vercel.app",
   "friday_voice": "Jessica",
   "tuesday_voice": "Charlie",
-  "ai": "not_connected_yet",
+  "ai_provider": "openai",
+  "ai_model": "gpt-5.6-luna",
+  "ai": "requires_openai_api_key_in_vercel",
   "features": [
     "voice_output",
     "voice_commands",
@@ -21,8 +23,12 @@
     "friday_voice_profile",
     "tuesday_voice_profile",
     "system_tts_fallback",
-    "backend_health_check",
     "fixed_production_backend",
-    "default_voice_pair"
+    "default_voice_pair",
+    "openai_responses_api",
+    "local_command_routing",
+    "short_conversation_history",
+    "friday_memory_context",
+    "separate_tuesday_context"
   ]
 }
