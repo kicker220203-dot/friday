@@ -1,8 +1,9 @@
 {
-  "version": "v0.5.2-hotfix",
-  "build": "052hotfix",
-  "stage": "web-hotfix",
-  "ai": "disabled_requires_backend_proxy",
+  "version": "v0.6-voice",
+  "build": "06voice",
+  "stage": "neural-voice",
+  "voice_provider": "elevenlabs",
+  "ai": "not_connected_yet",
   "features": [
     "voice_output",
     "voice_commands",
@@ -12,12 +13,11 @@
     "modes",
     "tuesday_lite",
     "settings_panel",
-    "diagnostics_toggle"
-  ],
-  "fixes": [
-    "silent_session_timeout",
-    "voice_command_synonyms",
-    "two_step_timer",
-    "settings_touch_selection"
+    "diagnostics_toggle",
+    "neural_tts_proxy",
+    "friday_voice_profile",
+    "tuesday_voice_profile",
+    "system_tts_fallback",
+    "backend_health_check"
   ]
 }
