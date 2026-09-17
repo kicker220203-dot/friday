@@ -19,11 +19,12 @@ module.exports = async function handler(req, res) {
 
   res.setHeader('Cache-Control', 'no-store');
   return res.status(200).json({
-    ok: keyConfigured && fridayConfigured,
+    ok: keyConfigured,
     provider: 'elevenlabs',
     model: process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5',
     apiKeyConfigured: keyConfigured,
-    fridayVoiceConfigured: fridayConfigured,
-    tuesdayVoiceConfigured: tuesdayConfigured
+    fridayDefaultVoiceConfigured: fridayConfigured,
+    tuesdayDefaultVoiceConfigured: tuesdayConfigured,
+    voiceSelection: 'client_or_env'
   });
 };
