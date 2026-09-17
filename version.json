@@ -1,8 +1,11 @@
 {
-  "version": "v0.6-voice",
-  "build": "06voice",
+  "version": "v0.6.1-voice",
+  "build": "061voice",
   "stage": "neural-voice",
   "voice_provider": "elevenlabs",
+  "voice_backend": "https://friday-uocw.vercel.app",
+  "friday_voice": "Jessica",
+  "tuesday_voice": "Charlie",
   "ai": "not_connected_yet",
   "features": [
     "voice_output",
@@ -18,6 +21,8 @@
     "friday_voice_profile",
     "tuesday_voice_profile",
     "system_tts_fallback",
-    "backend_health_check"
+    "backend_health_check",
+    "fixed_production_backend",
+    "default_voice_pair"
   ]
 }
