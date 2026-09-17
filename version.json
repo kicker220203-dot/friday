@@ -1,17 +1,17 @@
 {
-  "version": "v0.5-web",
-  "build": "05web",
+  "version": "v0.5.1-stable",
+  "build": "051stable",
+  "stage": "web-stabilization",
+  "ai": "disabled_requires_backend_proxy",
   "features": [
-    "face",
-    "touch",
     "voice_output",
-    "voice_control",
-    "voice_session",
-    "timers",
-    "local_memory",
+    "voice_commands",
+    "stable_voice_session",
+    "named_multi_timers",
+    "structured_local_memory",
     "modes",
     "tuesday_lite",
-    "menu_panels"
-  ],
-  "ai": "disabled_requires_backend_proxy"
+    "settings_panel",
+    "diagnostics_toggle"
+  ]
 }

@@ -1,693 +1,127 @@
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
+const face=$('face'),eyesWrap=$('eyesWrap'),menu=$('menu'),menuCard=$('menuCard'),panel=$('panel'),panelCard=$('panelCard'),panelTitle=$('panelTitle'),panelContent=$('panelContent'),panelClose=$('panelClose'),toast=$('toast'),voiceGate=$('voiceGate'),unlockVoiceBtn=$('unlockVoiceBtn'),skipVoiceBtn=$('skipVoiceBtn');
 
-const face = $("face");
-const eyesWrap = $("eyesWrap");
-const menu = $("menu");
-const menuCard = $("menuCard");
-const panel = $("panel");
-const panelTitle = $("panelTitle");
-const panelContent = $("panelContent");
-const panelClose = $("panelClose");
-const toast = $("toast");
-const voiceGate = $("voiceGate");
-const unlockVoiceBtn = $("unlockVoiceBtn");
-const skipVoiceBtn = $("skipVoiceBtn");
+const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+const DEFAULT_SETTINGS={voiceSession:true,sessionWindowSec:7,diagnostics:false};
+let settings={...DEFAULT_SETTINGS,...loadJSON('friday_settings',{})};
+let mode=localStorage.getItem('friday_mode')||'normal';
+let persona='friday';
+let isSleeping=false,isListening=false,isSpeaking=false,sessionActive=false,micTestMode=false;
+let lastAnswer='Я пока ничего не говорила.';
+let recognition=null,voices=[];
+let timers=migrateTimers(loadJSON('friday_timers',[]));
+let memories=migrateMemories(loadJSON('friday_memories',[]));
+let pendingConfirm=null;
+let pressStart=null,longPressTriggered=false,ignoreNextClickUntil=0,pokeCount=0;
+let longPressTimer=null,singleTapTimer=null,blinkTimer=null,idleTimer=null,toastTimer=null,speechWatchdog=null,listenWatchdog=null,sessionTimer=null,timerInterval=null,pokeWindowTimer=null;
+const DOUBLE_TAP_DELAY=285,LONG_PRESS_DELAY=620,MOVE_CANCEL_DISTANCE=14;
 
-let mode = localStorage.getItem("friday_mode") || "normal";
-let persona = "friday";
-let isSleeping = false;
-let isListening = false;
-let isSpeaking = false;
-let sessionActive = false;
-let sessionTimer = null;
-let pokeCount = 0;
-let lastAnswer = "Я пока ничего не говорила.";
-let debugEcho = false;
-let micTestMode = false;
+const messages={tap:['Да?','Слушаю.','Я здесь.','М?'],poke:['Ай. Условно.','Макс, это было лично.','Я, конечно, ИИ, но осуждаю.'],annoyed:['Макс, экран работает.','Я поняла. Сенсор жив.'],sleep:['Ушла в сон.','Спящий режим.','Буду тихой.'],wake:['Уже здесь.','Слушаю.','Проснулась.'],menu:['Меню.','Открыла меню.'],noSpeech:['Не расслышала.','Повтори, пожалуйста.']};
 
-let longPressTimer = null;
-let toastTimer = null;
-let idleTimer = null;
-let blinkTimer = null;
-let pokeWindowTimer = null;
-let singleTapTimer = null;
-let speechWatchdog = null;
-let listenWatchdog = null;
-let timerInterval = null;
+function loadJSON(key,fallback){try{return JSON.parse(localStorage.getItem(key))??fallback}catch{return fallback}}
+function saveJSON(key,value){localStorage.setItem(key,JSON.stringify(value))}
+function pick(a){return a[Math.floor(Math.random()*a.length)]}
+function normalize(t=''){return t.replace(/[.,!?;:]/g,' ').replace(/\s+/g,' ').trim().toLowerCase()}
+function includesAny(t,arr){return arr.some(x=>t.includes(x))}
+function escapeHTML(s=''){return String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function menuOpen(){return !menu.classList.contains('hidden')}
+function panelOpen(){return !panel.classList.contains('hidden')}
+function saveSettings(){saveJSON('friday_settings',settings)}
+function maybeStatus(text,force=false,ms=1700){if(!force&&!settings.diagnostics)return;toast.textContent=text;toast.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.add('hidden'),ms)}
 
-let pressStart = null;
-let longPressTriggered = false;
-let ignoreNextClickUntil = 0;
+function migrateTimers(list){const now=Date.now();return (Array.isArray(list)?list:[]).map((t,i)=>({id:t.id||`${now}-${i}`,label:(t.label&&t.label!=='таймер')?t.label:'без названия',endAt:Number(t.endAt)||now,createdAt:t.createdAt||new Date().toISOString()})).filter(t=>t.endAt>now)}
+function migrateMemories(list){return (Array.isArray(list)?list:[]).map((m,i)=>({id:m.id||`${Date.now()}-${i}`,content:String(m.content||m.title||'').trim(),category:['profile','projects','decisions','notes'].includes(m.category)?m.category:'notes',topic:String(m.topic||'').trim(),importance:['low','medium','high'].includes(m.importance)?m.importance:'medium',createdAt:m.createdAt||new Date().toISOString(),status:m.status||'active'})).filter(m=>m.content)}
+saveJSON('friday_timers',timers);saveJSON('friday_memories',memories);
 
-const DOUBLE_TAP_DELAY = 285;
-const LONG_PRESS_DELAY = 620;
-const MOVE_CANCEL_DISTANCE = 14;
-const SESSION_MS = 7500;
+function setState(state){face.className='face';if(mode==='quiet')face.classList.add('quiet');if(mode==='work')face.classList.add('work');if(persona==='tuesday')face.classList.add('tuesday');if(state)face.classList.add(state)}
+function applyMode(newMode,silent=false){mode=newMode;localStorage.setItem('friday_mode',mode);if(!isSleeping&&!isListening&&!isSpeaking)setState('idle');if(!silent)speak({normal:'Обычный режим.',quiet:'Тихий режим.',work:'Рабочий режим.'}[mode]||'Режим изменён.')}
+function blink(){if(isSleeping||menuOpen()||panelOpen()||isListening)return;face.classList.add('blink');setTimeout(()=>face.classList.remove('blink'),180)}
+function scheduleBlink(){clearTimeout(blinkTimer);blinkTimer=setTimeout(()=>{blink();scheduleBlink()},2400+Math.random()*4800)}
+function idleMove(){if(isSleeping||menuOpen()||panelOpen()||isListening||isSpeaking)return;const x=(Math.random()-.5)*22,y=(Math.random()-.5)*10,s=.98+Math.random()*.045;eyesWrap.style.transform=`translate3d(${x}px,${y}px,0) scale(${s})`;setTimeout(()=>{if(!isSleeping&&!menuOpen()&&!panelOpen())eyesWrap.style.transform=''},1200+Math.random()*1200)}
+function scheduleIdle(){clearTimeout(idleTimer);idleTimer=setTimeout(()=>{idleMove();scheduleIdle()},mode==='quiet'?30000+Math.random()*36000:12000+Math.random()*24000)}
 
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let voices = [];
+function loadVoices(){voices=window.speechSynthesis?window.speechSynthesis.getVoices():[]}
+if('speechSynthesis'in window){loadVoices();window.speechSynthesis.onvoiceschanged=loadVoices}
+function findFridayVoice(){if(!voices.length)loadVoices();const ru=voices.filter(v=>(v.lang||'').toLowerCase().startsWith('ru')),hints=['milena','alena','anna','elena','female','жен','katya','oksana','russian'];return ru.find(v=>hints.some(h=>(v.name||'').toLowerCase().includes(h)))||ru[0]||voices[0]||null}
+function estimateSpeechMs(t){return Math.min(10000,Math.max(1300,t.length*72+800))}
+function speak(text,opts={}){lastAnswer=text;return new Promise(resolve=>{if(!('speechSynthesis'in window)){maybeStatus(text,true,2500);resolve(false);return}try{clearTimeout(speechWatchdog);window.speechSynthesis.cancel();window.speechSynthesis.resume();const u=new SpeechSynthesisUtterance(text);u.lang='ru-RU';u.rate=opts.rate||(mode==='work'?1.11:1.03);u.pitch=opts.pitch||(persona==='tuesday'?.84:1.08);u.volume=mode==='quiet'?.50:1;const v=findFridayVoice();if(v)u.voice=v;let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(speechWatchdog);isSpeaking=false;if(!isSleeping&&!menuOpen()&&!panelOpen()&&!isListening)setState('idle');if(opts.continueSession&&sessionActive&&settings.voiceSession)armSession();resolve(true)};u.onstart=()=>{isSpeaking=true;if(!isSleeping&&!menuOpen()&&!panelOpen()&&!isListening)setState('speaking')};u.onend=finish;u.onerror=finish;speechWatchdog=setTimeout(finish,estimateSpeechMs(text)+1300);window.speechSynthesis.speak(u);setTimeout(()=>{try{window.speechSynthesis.resume()}catch{}},250)}catch{isSpeaking=false;resolve(false)}})}
+async function unlockVoice(){loadVoices();try{window.speechSynthesis?.cancel();window.speechSynthesis?.resume()}catch{}voiceGate.classList.add('hidden');await speak('Голос включён. Пятница готова.')}
+function stopListeningOnly(){try{if(recognition&&isListening)recognition.abort()}catch{}clearTimeout(listenWatchdog);isListening=false}
+function stopAllVoice(){try{if(recognition&&isListening)recognition.abort()}catch{}try{window.speechSynthesis?.cancel()}catch{}clearTimeout(speechWatchdog);clearTimeout(listenWatchdog);clearTimeout(sessionTimer);isListening=false;isSpeaking=false;sessionActive=false;if(!isSleeping&&!menuOpen()&&!panelOpen())setState('idle')}
+function forceIdle(){stopAllVoice();if(!isSleeping)setState('idle')}
 
-let timers = loadJSON("friday_timers", []);
-let memories = loadJSON("friday_memories", []);
-let noteDraftCounter = 0;
+function armSession(){if(!sessionActive||!settings.voiceSession||isSleeping||menuOpen()||panelOpen())return;clearTimeout(sessionTimer);sessionTimer=setTimeout(()=>{if(sessionActive&&!isSpeaking&&!isListening&&!isSleeping&&!menuOpen()&&!panelOpen())startListening(false,true)},650)}
+function endSession(){sessionActive=false;clearTimeout(sessionTimer);stopListeningOnly();if(!isSleeping&&!menuOpen()&&!panelOpen())setState('idle')}
 
-const messages = {
-  tap: ["Да?", "Слушаю.", "Я здесь.", "М?"],
-  poke: ["Ай. Условно.", "Макс, это было лично.", "Я, конечно, ИИ, но осуждаю.", "Ты сейчас проверяешь сенсор или моё терпение?"],
-  annoyed: ["Макс, экран работает.", "Я поняла. Сенсор жив.", "Ещё немного — и я начну моргать из принципа."],
-  sleep: ["Ушла в сон.", "Спящий режим.", "Буду тихой."],
-  wake: ["Уже здесь.", "Слушаю.", "Проснулась."],
-  menu: ["Меню.", "Служебный режим.", "Открыла меню."],
-  noSpeech: ["Не расслышала.", "Повтори, пожалуйста.", "Я не поняла последнюю часть."],
-};
+function openMenu(){clearTimeout(singleTapTimer);stopListeningOnly();sessionActive=false;if(isSleeping)wake(false);menu.classList.remove('hidden');menu.setAttribute('aria-hidden','false');setState('idle');speak(pick(messages.menu))}
+function closeMenu(silent=true){menu.classList.add('hidden');menu.setAttribute('aria-hidden','true');if(!isSleeping)setState('idle');if(!silent)speak('Закрыла.')}
+function openPanel(title,html,voice=''){closeMenu(true);panelTitle.textContent=title;panelContent.innerHTML=html;panel.classList.remove('hidden');panel.setAttribute('aria-hidden','false');if(voice)speak(voice)}
+function closePanel(silent=true){panel.classList.add('hidden');panel.setAttribute('aria-hidden','true');pendingConfirm=null;if(!isSleeping&&!menuOpen())setState('idle');if(!silent)speak('Закрыла.')}
+function sleep(showMessage=true){closeMenu(true);closePanel(true);endSession();isSleeping=true;setState('sleeping');if(showMessage)speak(pick(messages.sleep))}
+function wake(showMessage=true){isSleeping=false;setState('attentive');if(showMessage)speak(pick(messages.wake));setTimeout(()=>{if(!isSleeping&&!menuOpen()&&!panelOpen()&&!isListening&&!isSpeaking)setState('idle')},1500)}
 
-function loadJSON(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
-  catch { return fallback; }
-}
-function saveJSON(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
-}
-function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
-function menuOpen() { return !menu.classList.contains("hidden"); }
-function panelOpen() { return !panel.classList.contains("hidden"); }
+function singleTap(target){if(isListening)return;if(isSpeaking)stopAllVoice();if(isSleeping){wake();return}if(target.closest('.eye')){pokeReaction();return}setState('attentive');speak(pick(messages.tap))}
+function doubleTap(){if(isSpeaking)stopAllVoice();if(isSleeping){wake();return}sessionActive=settings.voiceSession;startListening(false,false)}
+function handleTapCandidate(target){if(menuOpen()||panelOpen()||longPressTriggered)return;if(singleTapTimer){clearTimeout(singleTapTimer);singleTapTimer=null;doubleTap();return}singleTapTimer=setTimeout(()=>{singleTapTimer=null;singleTap(target)},DOUBLE_TAP_DELAY)}
+function pokeReaction(){pokeCount++;clearTimeout(pokeWindowTimer);pokeWindowTimer=setTimeout(()=>pokeCount=0,14000);if(pokeCount>=8){setState('annoyed');speak('Ладно. Я всё поняла.');pokeCount=0;return}if(pokeCount>=4){setState('annoyed');speak(pick(messages.annoyed));return}setState('happy');speak(pick(messages.poke))}
 
-function showToast(text, ms = 1700) {
-  if (!text) return;
-  toast.textContent = text;
-  toast.classList.remove("hidden");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.add("hidden"), ms);
-}
+function getTimeText(){return new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}
+function getDateText(){return new Date().toLocaleDateString('ru-RU',{day:'numeric',month:'long'})}
+const wordNums={одну:1,один:1,одна:1,две:2,два:2,три:3,четыре:4,пять:5,шесть:6,семь:7,восемь:8,девять:9,десять:10,пятнадцать:15,двадцать:20,тридцать:30,сорок:40,пятьдесят:50,шестьдесят:60};
+function normalizedNumbers(text){let t=normalize(text);for(const [w,n] of Object.entries(wordNums))t=t.replace(new RegExp(`\b${w}\b`,'g'),String(n));return t}
+function parseDuration(text){const t=normalizedNumbers(text);let total=0;const h=t.match(/(\d+)\s*(час|часа|часов)/),m=t.match(/(\d+)\s*(минут|минута|минуты|мин)\b/),s=t.match(/(\d+)\s*(секунд|секунда|секунды|сек)\b/);if(h)total+=+h[1]*3600;if(m)total+=+m[1]*60;if(s)total+=+s[1];if(!total){const n=t.match(/(\d+)/);if(n)total=+n[1]*60}return total}
+function extractTimerLabel(raw){let t=raw.toLowerCase();t=t.replace(/поставь|создай|запусти|засеки|таймер|отсчитай|на\s+\d+\s*(час(?:а|ов)?|минут(?:а|ы)?|мин|секунд(?:а|ы)?|сек)|\d+\s*(час(?:а|ов)?|минут(?:а|ы)?|мин|секунд(?:а|ы)?|сек)/gi,' ').replace(/\s+/g,' ').trim();t=t.replace(/^(на|для)\s+/,'').trim();return t&&t.length<=40?t:'без названия'}
+function formatDuration(sec){sec=Math.max(0,Math.round(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;if(h)return`${h} ч ${m} мин`;if(m)return`${m} мин${s?` ${s} сек`:''}`;return`${s} сек`}
+function createTimer(seconds,label){const timer={id:String(Date.now()),label:label||'без названия',endAt:Date.now()+seconds*1000,createdAt:new Date().toISOString()};timers.push(timer);saveJSON('friday_timers',timers);ensureTimerTicker();return speak(timer.label==='без названия'?`Таймер на ${formatDuration(seconds)}.`:`Таймер «${timer.label}» на ${formatDuration(seconds)}.`,{continueSession:true})}
+function activeTimers(){const now=Date.now();timers=timers.filter(t=>t.endAt>now);saveJSON('friday_timers',timers);return timers.slice().sort((a,b)=>a.endAt-b.endAt)}
+function timerStatus(query=''){const a=activeTimers();if(!a.length)return speak('Активных таймеров нет.',{continueSession:true});const q=normalize(query);const t=q?a.find(x=>normalize(x.label).includes(q)):a[0];if(!t)return speak('Такой таймер не нашла.',{continueSession:true});const left=Math.ceil((t.endAt-Date.now())/1000);return speak(t.label==='без названия'?`Осталось ${formatDuration(left)}.`:`«${t.label}»: осталось ${formatDuration(left)}.`,{continueSession:true})}
+function cancelTimer(query=''){const a=activeTimers();if(!a.length)return speak('Активных таймеров нет.',{continueSession:true});const q=normalize(query);if(!q){timers=[];saveJSON('friday_timers',timers);return speak('Все таймеры отменены.',{continueSession:true})}const before=timers.length;timers=timers.filter(t=>!normalize(t.label).includes(q));saveJSON('friday_timers',timers);return speak(before!==timers.length?'Таймер отменён.':'Такой таймер не нашла.',{continueSession:true})}
+function ensureTimerTicker(){if(timerInterval)return;timerInterval=setInterval(()=>{const now=Date.now(),expired=timers.filter(t=>t.endAt<=now);if(!expired.length)return;timers=timers.filter(t=>t.endAt>now);saveJSON('friday_timers',timers);for(const t of expired)speak(t.label==='без названия'?'Таймер закончился.':`Таймер «${t.label}» закончился.`)},1000)}
+function renderTimers(){const a=activeTimers();const html=a.length?a.map(t=>`<div class="item"><div class="item-title">${escapeHTML(t.label)}</div><div>${formatDuration(Math.ceil((t.endAt-Date.now())/1000))}</div><div class="item-meta">осталось</div></div>`).join(''):'<div class="item">Активных таймеров нет.</div>';openPanel('Таймеры',html,a.length?'Показала таймеры.':'Активных таймеров нет.')}
 
-function setState(state) {
-  face.className = "face";
-  if (mode === "quiet") face.classList.add("quiet");
-  if (mode === "work") face.classList.add("work");
-  if (persona === "tuesday") face.classList.add("tuesday");
-  if (state) face.classList.add(state);
-}
+function memoryCategoryFromText(text){const t=normalize(text);if(includesAny(t,['про меня','мой профиль','обо мне']))return'profile';if(includesAny(t,['решение','мы решили','принято']))return'decisions';if(includesAny(t,['проект','проекта','проекте']))return'projects';return'notes'}
+function extractTopic(text,category){if(category==='projects'){const m=text.match(/проект(?:е|а|у)?\s+([^,:.]+?)(?:\s+что|[:,.]|$)/i);if(m)return m[1].trim().slice(0,50)}return''}
+function cleanMemoryContent(raw){return raw.replace(/^(запомни|сохрани|не забудь)\s*/i,'').replace(/^(в\s+)?проект(?:е|а|у)?\s+[^,:.]+?\s+(что\s+)?/i,'').replace(/^решение\s*[:—-]?\s*/i,'').trim()}
+function addMemory(raw){const category=memoryCategoryFromText(raw),topic=extractTopic(raw,category),content=cleanMemoryContent(raw);if(!content)return speak('Что именно запомнить?',{continueSession:true});memories.push({id:String(Date.now()),content,category,topic,importance:category==='decisions'?'high':'medium',createdAt:new Date().toISOString(),status:'active'});saveJSON('friday_memories',memories);return speak(category==='projects'&&topic?`Запомнила в проект «${topic}».`:'Запомнила.',{continueSession:true})}
+function findMemories(query=''){const active=memories.filter(m=>m.status!=='archived');const q=normalize(query);if(!q)return active.slice(-5);return active.filter(m=>normalize(`${m.topic} ${m.content}`).includes(q))}
+function listMemory(query=''){const found=findMemories(query);if(!found.length)return speak(query?'По этому запросу ничего не нашла.':'Память пока пустая.',{continueSession:true});const sample=found.slice(-4).map(m=>m.content).join('. ');return speak(`Помню: ${sample}.`,{continueSession:true})}
+function forgetMemory(query=''){const q=normalize(query);if(!q)return speak('Скажи, что именно забыть.',{continueSession:true});const before=memories.length;memories=memories.filter(m=>!normalize(`${m.topic} ${m.content}`).includes(q));saveJSON('friday_memories',memories);return speak(before!==memories.length?'Удалила из памяти.':'Не нашла такую запись.',{continueSession:true})}
+function categoryName(c){return{profile:'Профиль',projects:'Проекты',decisions:'Решения',notes:'Заметки'}[c]||'Заметки'}
+function renderMemory(filter='all'){const active=memories.filter(m=>m.status!=='archived'&&(filter==='all'||m.category===filter));const tabs=`<div class="row"><button data-panel-action="mem-all">Все</button><button data-panel-action="mem-projects">Проекты</button></div><div class="row"><button data-panel-action="mem-decisions">Решения</button><button data-panel-action="mem-notes">Заметки</button></div>`;const items=active.length?active.slice().reverse().map(m=>`<div class="item"><div class="item-title">${escapeHTML(m.topic||m.content.slice(0,42))}<span class="badge">${categoryName(m.category)}</span></div><div>${escapeHTML(m.content)}</div></div>`).join(''):'<div class="item">Здесь пока пусто.</div>';openPanel('Память',tabs+items,false)}
 
-function applyMode(newMode, silent = false) {
-  mode = newMode;
-  localStorage.setItem("friday_mode", mode);
-  if (!isSleeping && !isListening && !isSpeaking) setState("idle");
-  if (!silent) {
-    const names = { normal: "Обычный режим.", quiet: "Тихий режим.", work: "Рабочий режим." };
-    speak(names[mode] || "Режим изменён.");
-  }
-}
+function renderSettings(){const html=`<div class="item"><div class="item-title">Голосовая сессия</div><div class="small">После ответа Пятница снова слушает без нового двойного тапа.</div><button data-panel-action="toggle-session">${settings.voiceSession?'Включена':'Выключена'}</button></div><div class="item"><div class="item-title">Ожидание продолжения</div><div class="small">Сейчас: ${settings.sessionWindowSec} сек.</div><div class="row"><button data-panel-action="session-5">5 сек</button><button data-panel-action="session-7">7 сек</button><button data-panel-action="session-10">10 сек</button></div></div><div class="item"><div class="item-title">Диагностика</div><div class="small">Показывать распознанный текст и технические статусы.</div><button data-panel-action="toggle-diag">${settings.diagnostics?'Включена':'Выключена'}</button></div><div class="item"><div class="item-title">Данные</div><button data-panel-action="clear-timers">Очистить таймеры</button><button class="danger" data-panel-action="clear-memory">Очистить память</button></div><div class="item"><div class="item-title">AI</div><div class="small">Не подключён. Для безопасного подключения нужен backend-прокси.</div></div>`;openPanel('Настройки',html,false)}
+function confirmPanel(kind){pendingConfirm=kind;const label=kind==='memory'?'память':'таймеры';openPanel('Подтверждение',`<div class="item"><div class="item-title danger">Очистить ${label}?</div><div class="small">Это действие нельзя отменить.</div><div class="row"><button data-panel-action="confirm-cancel">Отмена</button><button class="danger" data-panel-action="confirm-clear">Очистить</button></div></div>`,false)}
 
-function forceIdle() {
-  isSpeaking = false; isListening = false;
-  clearTimeout(speechWatchdog); clearTimeout(listenWatchdog);
-  try { if (recognition) recognition.abort(); } catch {}
-  try { if ("speechSynthesis" in window) window.speechSynthesis.cancel(); } catch {}
-  if (!isSleeping && !menuOpen() && !panelOpen()) setState("idle");
-}
+function tuesdayLite(){if(isSpeaking)stopAllVoice();if(isSleeping)wake(false);closeMenu(true);closePanel(true);persona='tuesday';face.classList.add('glitch');setTimeout(()=>{face.classList.remove('glitch');setState('tuesday');sessionActive=settings.voiceSession;speak('Вторник Lite. Давай идею.',{continueSession:true})},420)}
+function backToFriday(){persona='friday';setState('attentive');return speak('Вернула Пятницу.',{continueSession:sessionActive})}
+function tuesdayAnalyze(raw){const t=normalize(raw);let parts=[];if(includesAny(t,['купить','покупк','заказать']))parts.push('Сначала проверь, что покупка реально разблокирует следующий шаг.');if(includesAny(t,['v1','первая версия','корпус','мотор','серво','esp']))parts.push('Для первой версии отсеки всё, без чего проверка идеи всё равно работает.');if(includesAny(t,['бизнес','доход','деньг','заработ']))parts.push('Отдели потенциальную выручку от реального способа получить первого клиента.');if(!parts.length)parts=['Назови конкретную пользу, цену по времени и самый дешёвый способ проверить идею.'];return `Разбор: ${parts.join(' ')} Если это не блокирует текущую версию — в бэклог.`}
 
-function blink() {
-  if (isSleeping || menuOpen() || panelOpen() || isListening) return;
-  face.classList.add("blink");
-  setTimeout(() => face.classList.remove("blink"), 180);
-}
-function scheduleBlink() {
-  clearTimeout(blinkTimer);
-  blinkTimer = setTimeout(() => { blink(); scheduleBlink(); }, 2400 + Math.random() * 4800);
-}
-function idleMove() {
-  if (isSleeping || menuOpen() || panelOpen() || isListening || isSpeaking) return;
-  const x = (Math.random() - .5) * 22;
-  const y = (Math.random() - .5) * 10;
-  const s = .98 + Math.random() * .045;
-  eyesWrap.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
-  setTimeout(() => { if (!isSleeping && !menuOpen() && !panelOpen()) eyesWrap.style.transform = ""; }, 1200 + Math.random() * 1200);
-}
-function scheduleIdle() {
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => { idleMove(); scheduleIdle(); }, mode === "quiet" ? 30000 + Math.random() * 36000 : 12000 + Math.random() * 24000);
-}
+function setupRecognition(fromSession){if(!SpeechRecognition)return null;const r=new SpeechRecognition();r.lang='ru-RU';r.continuous=false;r.interimResults=true;r.maxAlternatives=1;r.onstart=()=>{isListening=true;if(!isSleeping&&!menuOpen()&&!panelOpen())setState('listening');maybeStatus(micTestMode?'Тест микрофона: говори.':'Слушаю...',micTestMode||settings.diagnostics,1400);clearTimeout(listenWatchdog);listenWatchdog=setTimeout(()=>{if(!isListening)return;try{r.stop()}catch{}isListening=false;if(fromSession){endSession();setState('idle')}else speak('Не расслышала.',{continueSession:false})},settings.sessionWindowSec*1000)};r.onresult=e=>{let finalText='',interim='';for(let i=e.resultIndex;i<e.results.length;i++){const p=e.results[i][0]?.transcript||'';if(e.results[i].isFinal)finalText+=p;else interim+=p}const heard=(finalText||interim).trim();if(heard)maybeStatus(`Слышу: ${heard}`,micTestMode||settings.diagnostics,1800);if(!finalText)return;clearTimeout(listenWatchdog);isListening=false;const tr=finalText.trim();if(!tr){if(fromSession){endSession();return}return speak(pick(messages.noSpeech))}handleVoiceCommand(tr)};r.onerror=e=>{clearTimeout(listenWatchdog);isListening=false;if(e.error==='no-speech'&&fromSession){endSession();return}const msg=(e.error==='not-allowed'||e.error==='service-not-allowed')?'Мне нужен доступ к микрофону.':e.error==='no-speech'?pick(messages.noSpeech):'Микрофон сейчас не сработал.';speak(msg,{continueSession:false})};r.onend=()=>{clearTimeout(listenWatchdog);isListening=false;if(!isSleeping&&!menuOpen()&&!panelOpen()&&!isSpeaking)setState('idle')};return r}
+function startListening(test=false,fromSession=false){if(isSpeaking)stopAllVoice();if(!SpeechRecognition)return speak('Голосовое управление недоступно в этом браузере.');if(isSleeping)wake(false);closeMenu(true);closePanel(true);micTestMode=test;if(!fromSession&&!test)sessionActive=settings.voiceSession;try{recognition=setupRecognition(fromSession);if(!recognition)return;window.speechSynthesis?.cancel();window.speechSynthesis?.resume();isSpeaking=false;setState('listening');recognition.start()}catch{isListening=false;setState('confused');speak('Микрофон занят. Попробуй ещё раз.')}}
 
-function loadVoices() { voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : []; }
-if ("speechSynthesis" in window) {
-  loadVoices();
-  window.speechSynthesis.onvoiceschanged = loadVoices;
-}
-function findFridayVoice() {
-  if (!voices.length) loadVoices();
-  const ru = voices.filter(v => (v.lang || "").toLowerCase().startsWith("ru"));
-  const hints = ["milena", "alena", "anna", "elena", "female", "жен", "katya", "oksana", "russian"];
-  return ru.find(v => hints.some(h => (v.name || "").toLowerCase().includes(h))) || ru[0] || voices[0] || null;
-}
-function estimateSpeechMs(text) { return Math.min(11000, Math.max(1400, text.length * 76 + 850)); }
+function abilitiesText(){return'Таймеры, память, время, дата, режимы, повтор ответа и Вторник Lite.'}
+function handleVoiceCommand(raw){const text=normalize(raw);if(micTestMode){micTestMode=false;return speak(`Я услышала: ${raw}.`)}if(includesAny(text,['стоп','замолчи','остановись','хватит'])){stopAllVoice();return}if(includesAny(text,['отбой','всё','все','до связи','закончить'])){endSession();return speak('Отбой.')}if(includesAny(text,['повтори','повтор']))return speak(lastAnswer,{continueSession:true});if(includesAny(text,['спать','усни','засыпай']))return speak('Ушла в сон.').then(()=>sleep(false));if(includesAny(text,['проснись','вставай'])){isSleeping=false;setState('attentive');return speak('Уже здесь.',{continueSession:true})}if(includesAny(text,['тихий режим','потише'])){applyMode('quiet',true);return speak('Тихий режим.',{continueSession:true})}if(includesAny(text,['рабочий режим','соберись'])){applyMode('work',true);return speak('Рабочий режим.',{continueSession:true})}if(includesAny(text,['обычный режим','нормальный режим'])){applyMode('normal',true);return speak('Обычный режим.',{continueSession:true})}if(includesAny(text,['который час','сколько времени']))return speak(getTimeText(),{continueSession:true});if(includesAny(text,['какое сегодня число','какая дата']))return speak(getDateText(),{continueSession:true});
+  if(includesAny(text,['поставь таймер','засеки','таймер на','создай таймер','отсчитай'])){const sec=parseDuration(raw);if(!sec)return speak('На сколько поставить таймер?',{continueSession:true});return createTimer(sec,extractTimerLabel(raw))}
+  if(includesAny(text,['сколько осталось','сколько там осталось'])){let q=raw.replace(/сколько( там)? осталось/ig,'').trim();return timerStatus(q)}
+  if(includesAny(text,['отмени таймер','убери таймер','сбрось таймер'])){let q=raw.replace(/отмени таймер|убери таймер|сбрось таймер/ig,'').trim();return cancelTimer(q)}
+  if(includesAny(text,['что ты умеешь','помощь','команды']))return speak(abilitiesText(),{continueSession:true});if(includesAny(text,['режимы']))return speak('Обычный, рабочий, тихий, сон и Вторник Lite.',{continueSession:true});
+  if(text.startsWith('запомни')||text.startsWith('сохрани')||text.startsWith('не забудь'))return addMemory(raw);
+  if(includesAny(text,['что ты помнишь','что в памяти'])){const q=raw.replace(/что ты помнишь|что в памяти/ig,'').replace(/^\s*(о|об|про)\s*/i,'').trim();return listMemory(q)}
+  if(text.startsWith('забудь')||text.startsWith('удали из памяти')){const q=raw.replace(/^(забудь|удали из памяти)\s*/i,'').trim();return forgetMemory(q)}
+  if(includesAny(text,['открой меню','меню']))return speak('Открываю меню.').then(openMenu);if(includesAny(text,['вторник']))return tuesdayLite();if(includesAny(text,['верни пятницу','пятница обратно']))return backToFriday();if(persona==='tuesday')return speak(tuesdayAnalyze(raw),{continueSession:true});if(includesAny(text,['ai','искусственный интеллект','чат']))return speak('AI пока не подключён. Для него нужен безопасный backend.',{continueSession:true});if(text==='пятница'||text.endsWith(' пятница'))return speak(pick(messages.tap),{continueSession:true});setState('confused');return speak('Пока не умею. Скажи: что ты умеешь.',{continueSession:true})}
 
-function speak(text, opts = {}) {
-  lastAnswer = text;
-  return new Promise(resolve => {
-    showToast(text, Math.min(3600, estimateSpeechMs(text)));
-    if (!("speechSynthesis" in window)) { resolve(false); return; }
-    try {
-      clearTimeout(speechWatchdog);
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "ru-RU";
-      u.rate = opts.rate || (mode === "work" ? 1.10 : 1.03);
-      u.pitch = opts.pitch || (persona === "tuesday" ? 0.82 : 1.08);
-      u.volume = mode === "quiet" ? 0.50 : 1;
-      const v = findFridayVoice();
-      if (v) u.voice = v;
+function renderAbout(){openPanel('О версии','<div class="item"><div class="item-title">Пятница v0.5.1-stable</div><div>Стабильная веб-сборка перед подключением AI.</div><div class="item-meta">Голосовая сессия • именованные таймеры • структурированная память • настройки</div></div>',false)}
+function menuAction(a){if(a==='close')return closeMenu(false);if(a==='listen')return startListening(false,false);if(a==='memory')return renderMemory();if(a==='timers')return renderTimers();if(a==='settings')return renderSettings();if(a==='tuesday')return tuesdayLite();if(a==='normal'){closeMenu(true);return applyMode('normal')}if(a==='work'){closeMenu(true);return applyMode('work')}if(a==='quiet'){closeMenu(true);return applyMode('quiet')}if(a==='sleep')return sleep();if(a==='mic-test')return startListening(true,false);if(a==='voice-test'){closeMenu(true);return speak('Голос работает.')}if(a==='reset'){forceIdle();closeMenu(true);return speak('Сбросила.')}if(a==='about')return renderAbout()}
+function panelAction(a){if(a==='mem-all')return renderMemory('all');if(a==='mem-projects')return renderMemory('projects');if(a==='mem-decisions')return renderMemory('decisions');if(a==='mem-notes')return renderMemory('notes');if(a==='toggle-session'){settings.voiceSession=!settings.voiceSession;saveSettings();return renderSettings()}if(a==='toggle-diag'){settings.diagnostics=!settings.diagnostics;saveSettings();return renderSettings()}if(a.startsWith('session-')){settings.sessionWindowSec=Number(a.split('-')[1]);saveSettings();return renderSettings()}if(a==='clear-timers')return confirmPanel('timers');if(a==='clear-memory')return confirmPanel('memory');if(a==='confirm-cancel'){pendingConfirm=null;return renderSettings()}if(a==='confirm-clear'){if(pendingConfirm==='timers'){timers=[];saveJSON('friday_timers',timers)}if(pendingConfirm==='memory'){memories=[];saveJSON('friday_memories',memories)}const what=pendingConfirm;pendingConfirm=null;renderSettings();return speak(what==='memory'?'Память очищена.':'Таймеры очищены.')}}
 
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        clearTimeout(speechWatchdog);
-        isSpeaking = false;
-        if (!isSleeping && !menuOpen() && !panelOpen() && !isListening) setState("idle");
-        if (opts.continueSession) armSession();
-        resolve(true);
-      };
-      u.onstart = () => {
-        isSpeaking = true;
-        if (!isSleeping && !menuOpen() && !panelOpen() && !isListening) setState("speaking");
-      };
-      u.onend = finish;
-      u.onerror = finish;
-      speechWatchdog = setTimeout(finish, estimateSpeechMs(text) + 1400);
-      window.speechSynthesis.speak(u);
-      setTimeout(() => { try { window.speechSynthesis.resume(); } catch {} }, 250);
-    } catch {
-      isSpeaking = false;
-      if (!isSleeping && !menuOpen() && !panelOpen() && !isListening) setState("idle");
-      resolve(false);
-    }
-  });
-}
-
-async function unlockVoice() {
-  loadVoices();
-  try {
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
-    }
-  } catch {}
-  voiceGate.classList.add("hidden");
-  await speak("Голос включён. Пятница готова.");
-}
-
-function stopAllVoice() {
-  try { if (recognition && isListening) recognition.abort(); } catch {}
-  try { if ("speechSynthesis" in window) window.speechSynthesis.cancel(); } catch {}
-  clearTimeout(speechWatchdog); clearTimeout(listenWatchdog); clearTimeout(sessionTimer);
-  isListening = false; isSpeaking = false; sessionActive = false;
-  if (!isSleeping && !menuOpen() && !panelOpen()) setState("idle");
-}
-function stopListeningOnly() {
-  try { if (recognition && isListening) recognition.abort(); } catch {}
-  clearTimeout(listenWatchdog);
-  isListening = false;
-}
-
-function armSession() {
-  if (!sessionActive || isSleeping || menuOpen() || panelOpen()) return;
-  clearTimeout(sessionTimer);
-  sessionTimer = setTimeout(() => {
-    if (!sessionActive || isSleeping || menuOpen() || panelOpen() || isSpeaking || isListening) return;
-    startListening(false, true);
-  }, 700);
-}
-function endSession() {
-  sessionActive = false;
-  clearTimeout(sessionTimer);
-  stopListeningOnly();
-  if (!isSleeping && !menuOpen() && !panelOpen()) setState("idle");
-}
-
-function openMenu() {
-  clearTimeout(singleTapTimer);
-  stopListeningOnly();
-  if (isSleeping) wake(false);
-  menu.classList.remove("hidden");
-  menu.setAttribute("aria-hidden", "false");
-  setState("idle");
-  speak(pick(messages.menu));
-}
-function closeMenu(silent = false) {
-  menu.classList.add("hidden");
-  menu.setAttribute("aria-hidden", "true");
-  if (!isSleeping) setState("idle");
-  if (!silent) speak("Закрыла.");
-}
-function openPanel(title, html, voiceText = "") {
-  closeMenu(true);
-  panelTitle.textContent = title;
-  panelContent.innerHTML = html;
-  panel.classList.remove("hidden");
-  panel.setAttribute("aria-hidden", "false");
-  if (voiceText) speak(voiceText);
-}
-function closePanel(silent = true) {
-  panel.classList.add("hidden");
-  panel.setAttribute("aria-hidden", "true");
-  if (!isSleeping && !menuOpen()) setState("idle");
-  if (!silent) speak("Закрыла.");
-}
-
-function sleep(showMessage = true) {
-  closeMenu(true); closePanel(true);
-  stopListeningOnly();
-  isSleeping = true;
-  setState("sleeping");
-  if (showMessage) speak(pick(messages.sleep));
-}
-function wake(showMessage = true) {
-  isSleeping = false;
-  setState("attentive");
-  if (showMessage) speak(pick(messages.wake));
-  setTimeout(() => { if (!isSleeping && !menuOpen() && !panelOpen() && !isListening && !isSpeaking) setState("idle"); }, 1600);
-}
-function singleTap(target) {
-  if (isListening) return;
-  if (isSpeaking) stopAllVoice();
-  if (isSleeping) { wake(); return; }
-  if (target.closest(".eye")) { pokeReaction(); return; }
-  setState("attentive");
-  speak(pick(messages.tap));
-}
-function doubleTap() {
-  if (isSpeaking) stopAllVoice();
-  if (isSleeping) { wake(); return; }
-  sessionActive = true;
-  startListening(false, false);
-}
-function handleTapCandidate(target) {
-  if (menuOpen() || panelOpen() || longPressTriggered) return;
-  if (singleTapTimer) {
-    clearTimeout(singleTapTimer);
-    singleTapTimer = null;
-    doubleTap();
-    return;
-  }
-  singleTapTimer = setTimeout(() => { singleTapTimer = null; singleTap(target); }, DOUBLE_TAP_DELAY);
-}
-function pokeReaction() {
-  pokeCount++;
-  clearTimeout(pokeWindowTimer);
-  pokeWindowTimer = setTimeout(() => pokeCount = 0, 15000);
-  if (pokeCount >= 9) {
-    setState("annoyed");
-    speak("Ладно. Игнорирую.");
-    setTimeout(() => sleep(false), 900);
-    setTimeout(() => { if (isSleeping) wake(false); pokeCount = 0; }, 3600);
-    return;
-  }
-  if (pokeCount >= 6) { setState("annoyed"); speak(pick(messages.annoyed)); }
-  else if (pokeCount >= 3) { setState("confused"); speak("Макс, я поняла. Экран работает."); }
-  else { setState("happy"); speak(pick(messages.poke)); }
-}
-
-function tuesdayLite() {
-  if (isSpeaking) stopAllVoice();
-  if (isSleeping) wake(false);
-  closeMenu(true); closePanel(true);
-  stopListeningOnly();
-  persona = "tuesday";
-  face.classList.add("glitch");
-  setTimeout(() => {
-    face.classList.remove("glitch");
-    setState("tuesday");
-    speak("Вторник Lite. Без доступа к личным данным. Говори идею, я разберу её жёстче.");
-    sessionActive = true;
-    setTimeout(() => armSession(), 1200);
-  }, 420);
-}
-function backToFriday() {
-  persona = "friday";
-  setState("attentive");
-  speak("Вернула Пятницу.");
-}
-
-function normalize(text) {
-  return text.replace(/[.,!?;:]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-}
-function includesAny(text, words) { return words.some(w => text.includes(w)); }
-function getTimeText() { return new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }); }
-function getDateText() { return new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" }); }
-
-function parseDuration(text) {
-  const t = normalize(text);
-  let total = 0;
-  const hourMatch = t.match(/(\d+)\s*(час|часа|часов)/);
-  const minMatch = t.match(/(\d+)\s*(минут|минута|минуты|мин)/);
-  const secMatch = t.match(/(\d+)\s*(секунд|секунда|секунды|сек)/);
-  if (hourMatch) total += parseInt(hourMatch[1], 10) * 3600;
-  if (minMatch) total += parseInt(minMatch[1], 10) * 60;
-  if (secMatch) total += parseInt(secMatch[1], 10);
-  if (!total) {
-    const n = t.match(/(\d+)/);
-    if (n) total = parseInt(n[1], 10) * 60;
-  }
-  return total;
-}
-function formatDuration(seconds) {
-  seconds = Math.max(0, Math.round(seconds));
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h) return `${h} ч ${m} мин`;
-  if (m) return `${m} мин ${s ? s + " сек" : ""}`.trim();
-  return `${s} сек`;
-}
-function createTimer(seconds) {
-  const id = Date.now().toString();
-  const timer = { id, seconds, endAt: Date.now() + seconds * 1000, label: "таймер" };
-  timers.push(timer);
-  saveJSON("friday_timers", timers);
-  ensureTimerTicker();
-  speak("Таймер на " + formatDuration(seconds) + ".", { continueSession: true });
-}
-function getActiveTimers() {
-  const now = Date.now();
-  timers = timers.filter(t => t.endAt > now);
-  saveJSON("friday_timers", timers);
-  return timers;
-}
-function timerStatus() {
-  const active = getActiveTimers();
-  if (!active.length) return speak("Активных таймеров нет.", { continueSession: true });
-  const nearest = active.sort((a,b) => a.endAt - b.endAt)[0];
-  const left = Math.ceil((nearest.endAt - Date.now()) / 1000);
-  speak("Осталось " + formatDuration(left) + ".", { continueSession: true });
-}
-function cancelTimers() {
-  timers = [];
-  saveJSON("friday_timers", timers);
-  speak("Таймеры отменены.", { continueSession: true });
-}
-function ensureTimerTicker() {
-  if (timerInterval) return;
-  timerInterval = setInterval(() => {
-    const now = Date.now();
-    const expired = timers.filter(t => t.endAt <= now);
-    if (expired.length) {
-      timers = timers.filter(t => t.endAt > now);
-      saveJSON("friday_timers", timers);
-      speak("Таймер закончился.");
-    }
-  }, 1000);
-}
-function renderTimers() {
-  const active = getActiveTimers();
-  if (!active.length) {
-    openPanel("Таймеры", '<div class="item">Активных таймеров нет.</div>', "Активных таймеров нет.");
-    return;
-  }
-  const html = active.map(t => {
-    const left = Math.ceil((t.endAt - Date.now()) / 1000);
-    return `<div class="item"><div class="item-title">${formatDuration(left)}</div><div class="item-meta">до завершения</div></div>`;
-  }).join("");
-  openPanel("Таймеры", html, "Показала активные таймеры.");
-}
-
-function addMemory(content, category = "notes", importance = "medium") {
-  const clean = content.trim();
-  if (!clean) return speak("Что именно запомнить?", { continueSession: true });
-  const mem = { id: Date.now().toString(), title: clean.slice(0, 42), content: clean, category, importance, createdAt: new Date().toISOString(), status: "active" };
-  memories.push(mem);
-  saveJSON("friday_memories", memories);
-  speak("Запомнила.", { continueSession: true });
-}
-function listMemory(query = "") {
-  const active = memories.filter(m => m.status !== "archived");
-  if (!active.length) return speak("Память пока пустая.", { continueSession: true });
-  const q = normalize(query);
-  const found = q ? active.filter(m => normalize(m.content).includes(q) || normalize(m.title).includes(q)) : active.slice(-5);
-  if (!found.length) return speak("По этому запросу в памяти ничего не нашла.", { continueSession: true });
-  const text = found.map((m, i) => `${i + 1}. ${m.content}`).join(". ");
-  speak("Вот что я помню. " + text, { continueSession: true });
-}
-function forgetMemory(query = "") {
-  const q = normalize(query);
-  if (!q) return speak("Скажи, что именно забыть.", { continueSession: true });
-  const before = memories.length;
-  memories = memories.filter(m => !(normalize(m.content).includes(q) || normalize(m.title).includes(q)));
-  saveJSON("friday_memories", memories);
-  const removed = before - memories.length;
-  speak(removed ? "Удалила из памяти." : "Не нашла такую запись.", { continueSession: true });
-}
-function renderMemory() {
-  const active = memories.filter(m => m.status !== "archived");
-  const html = active.length
-    ? active.slice().reverse().map(m => `<div class="item"><div class="item-title">${escapeHTML(m.title)}</div><div>${escapeHTML(m.content)}</div><div class="item-meta">${m.category} • ${m.importance}</div></div>`).join("")
-    : '<div class="item">Память пока пустая.</div>';
-  openPanel("Память", html, active.length ? "Открыла память." : "Память пока пустая.");
-}
-function escapeHTML(s) {
-  return s.replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-}
-
-function setupRecognition() {
-  if (!SpeechRecognition) return null;
-  const r = new SpeechRecognition();
-  r.lang = "ru-RU";
-  r.continuous = false;
-  r.interimResults = true;
-  r.maxAlternatives = 1;
-  r.onstart = () => {
-    isListening = true;
-    if (!isSleeping && !menuOpen() && !panelOpen()) setState("listening");
-    showToast(micTestMode ? "Тест микрофона: скажи любую фразу." : "Слушаю...", 1400);
-    clearTimeout(listenWatchdog);
-    listenWatchdog = setTimeout(() => {
-      if (isListening) {
-        try { r.stop(); } catch {}
-        isListening = false;
-        setState("confused");
-        speak("Я слушала, но ничего не разобрала.", { continueSession: sessionActive });
-      }
-    }, 9000);
-  };
-  r.onresult = e => {
-    let finalText = "", interimText = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const part = e.results[i][0]?.transcript || "";
-      if (e.results[i].isFinal) finalText += part;
-      else interimText += part;
-    }
-    const heard = (finalText || interimText).trim();
-    if (heard) showToast("Слышу: " + heard, 1800);
-    if (!finalText) return;
-    clearTimeout(listenWatchdog);
-    isListening = false;
-    const tr = finalText.trim().toLowerCase();
-    if (!tr) return speak(pick(messages.noSpeech), { continueSession: sessionActive });
-    handleVoiceCommand(tr);
-  };
-  r.onerror = e => {
-    clearTimeout(listenWatchdog);
-    isListening = false;
-    if (!isSleeping && !menuOpen() && !panelOpen()) setState("confused");
-    const msg = e.error === "not-allowed" || e.error === "service-not-allowed"
-      ? "Мне нужен доступ к микрофону."
-      : e.error === "no-speech"
-        ? pick(messages.noSpeech)
-        : "Голосовое управление сейчас не сработало. Ошибка: " + e.error;
-    speak(msg, { continueSession: sessionActive });
-  };
-  r.onend = () => {
-    clearTimeout(listenWatchdog);
-    isListening = false;
-    if (!isSleeping && !menuOpen() && !panelOpen() && !isSpeaking) setState("idle");
-  };
-  return r;
-}
-function startListening(test = false, fromSession = false) {
-  if (isSpeaking) stopAllVoice();
-  if (!SpeechRecognition) return speak("Голосовое управление недоступно в этом браузере.");
-  if (isSleeping) wake(false);
-  closeMenu(true);
-  closePanel(true);
-  micTestMode = test;
-  if (!fromSession && !test) sessionActive = true;
-  try {
-    recognition = setupRecognition();
-    if ("speechSynthesis" in window) { window.speechSynthesis.cancel(); window.speechSynthesis.resume(); }
-    isSpeaking = false;
-    setState("listening");
-    recognition.start();
-  } catch {
-    isListening = false;
-    setState("confused");
-    speak("Я уже слушаю или микрофон занят.", { continueSession: sessionActive });
-  }
-}
-
-function handleVoiceCommand(raw) {
-  const text = normalize(raw);
-  if (micTestMode) {
-    micTestMode = false;
-    return speak("Я услышала: " + raw + ".", { continueSession: false });
-  }
-  const prefix = debugEcho ? "Я услышала: " + raw + ". " : "";
-
-  if (includesAny(text, ["стоп", "замолчи", "тихо", "остановись", "хватит"])) { stopAllVoice(); endSession(); return; }
-  if (includesAny(text, ["отбой", "всё", "все", "до связи", "закончить", "закрой сессию"])) { endSession(); return speak("Отбой."); }
-  if (includesAny(text, ["повтори", "повтор"])) return speak(lastAnswer, { continueSession: sessionActive });
-
-  if (includesAny(text, ["спать", "усни", "засыпай", "сон"])) { return speak(prefix + "Ухожу в сон.").then(() => sleep(false)); }
-  if (includesAny(text, ["проснись", "вставай"])) { isSleeping = false; setState("attentive"); return speak(prefix + "Уже здесь.", { continueSession: sessionActive }); }
-
-  if (includesAny(text, ["тихий режим", "потише"])) { applyMode("quiet", true); return speak(prefix + "Тихий режим.", { continueSession: sessionActive }); }
-  if (includesAny(text, ["рабочий режим", "работа", "соберись"])) { applyMode("work", true); return speak(prefix + "Рабочий режим.", { continueSession: sessionActive }); }
-  if (includesAny(text, ["обычный режим", "нормальный режим"])) { applyMode("normal", true); return speak(prefix + "Обычный режим.", { continueSession: sessionActive }); }
-
-  if (includesAny(text, ["который час", "сколько времени", "время"])) return speak(prefix + getTimeText(), { continueSession: sessionActive });
-  if (includesAny(text, ["какое сегодня число", "какая дата", "дата"])) return speak(prefix + getDateText(), { continueSession: sessionActive });
-
-  if (includesAny(text, ["поставь таймер", "засеки", "дай мне", "таймер на", "отсчитай"])) {
-    const seconds = parseDuration(text);
-    if (!seconds || seconds < 1) return speak("На сколько поставить таймер?", { continueSession: sessionActive });
-    return createTimer(seconds);
-  }
-  if (includesAny(text, ["сколько осталось", "остаток", "сколько там осталось"])) return timerStatus();
-  if (includesAny(text, ["отмени таймер", "убери таймер", "сбрось таймер"])) return cancelTimers();
-
-  if (includesAny(text, ["что ты умеешь", "помощь", "команды"])) return speak(abilitiesText(), { continueSession: sessionActive });
-  if (includesAny(text, ["режимы"])) return speak("Есть обычный режим, рабочий режим, тихий режим, сон и Вторник Lite.", { continueSession: sessionActive });
-
-  if (text.startsWith("запомни") || text.startsWith("сохрани") || text.includes("не забудь")) {
-    let content = raw.replace(/^(запомни|сохрани)\s*/i, "").replace(/не забудь\s*/i, "").trim();
-    return addMemory(content);
-  }
-  if (includesAny(text, ["что ты помнишь", "память", "что в памяти"])) {
-    const query = raw.replace(/что ты помнишь|память|что в памяти/ig, "").trim();
-    return listMemory(query);
-  }
-  if (text.startsWith("забудь") || text.startsWith("удали из памяти")) {
-    const query = raw.replace(/^(забудь|удали из памяти)\s*/i, "").trim();
-    return forgetMemory(query);
-  }
-
-  if (includesAny(text, ["открой меню", "меню"])) return speak(prefix + "Открываю меню.").then(openMenu);
-  if (includesAny(text, ["закрой меню", "закрыть меню", "закрой"])) { closeMenu(); closePanel(); return; }
-
-  if (includesAny(text, ["вторник"])) return tuesdayLite();
-  if (includesAny(text, ["верни пятницу", "пятница обратно"])) return backToFriday();
-
-  if (persona === "tuesday") {
-    return speak(tuesdayAnalyze(raw), { continueSession: sessionActive });
-  }
-
-  if (includesAny(text, ["ai", "искусственный интеллект", "чат"])) {
-    return speak("AI-модуль в веб-версии пока отключён. Нужен отдельный сервер, чтобы не хранить ключ прямо в сайте.", { continueSession: sessionActive });
-  }
-
-  if (text === "пятница" || text.endsWith(" пятница")) {
-    setState("attentive");
-    return speak(prefix + pick(messages.tap), { continueSession: sessionActive });
-  }
-
-  setState("confused");
-  speak("Пока не умею это выполнять. Скажи: что ты умеешь.", { continueSession: sessionActive });
-}
-function abilitiesText() {
-  return "Я умею говорить голосом, слушать команды, ставить таймеры, говорить время и дату, переключать режимы, спать и просыпаться, запоминать простые заметки, читать память, забывать записи, повторять последний ответ и включать Вторника Lite.";
-}
-function tuesdayAnalyze(raw) {
-  const idea = raw.trim();
-  if (!idea) return "Сформулируй идею, Максим.";
-  return "Разбор Вторника. Идея: " + idea + ". Первое: проверь, решает ли она реальную задачу. Второе: оцени цену времени. Третье: не добавляй это в v1, если без этого проект всё ещё работает. Мой вердикт: занести в бэклог, если это не блокирует текущую версию.";
-}
-
-function menuAction(action) {
-  if (action === "close") return closeMenu();
-  if (action === "listen") return startListening(false);
-  if (action === "mic-test") return startListening(true);
-  if (action === "voice-test") { closeMenu(true); return speak("Слушаю, Макс. Голосовой ответ работает."); }
-  if (action === "abilities") { closeMenu(true); return speak(abilitiesText()); }
-  if (action === "memory") return renderMemory();
-  if (action === "timers") return renderTimers();
-  if (action === "tuesday") return tuesdayLite();
-  if (action === "wake") { closeMenu(true); return wake(); }
-  if (action === "idle") { closeMenu(true); return applyMode("normal"); }
-  if (action === "work") { closeMenu(true); return applyMode("work"); }
-  if (action === "quiet") { closeMenu(true); return applyMode("quiet"); }
-  if (action === "sleep") return sleep();
-  if (action === "reset") { forceIdle(); showToast("Состояние сброшено.", 1600); return speak("Сбросила зависание."); }
-  if (action === "about") { closeMenu(true); return speak("Пятница v0.5-web. Максимальная веб-версия без внешнего AI. Голос, память, таймеры, режимы и Вторник Lite."); }
-}
-
-["contextmenu", "selectstart", "dragstart"].forEach(n => document.addEventListener(n, e => e.preventDefault()));
-
-unlockVoiceBtn.addEventListener("click", unlockVoice);
-skipVoiceBtn.addEventListener("click", () => { voiceGate.classList.add("hidden"); showToast("Продолжили без разблокировки голоса.", 1600); });
-
-menu.addEventListener("pointerdown", e => { e.preventDefault(); if (e.target === menu) closeMenu(true); }, { passive: false });
-menuCard.addEventListener("pointerdown", e => e.stopPropagation(), { passive: false });
-menuCard.addEventListener("click", e => { e.stopPropagation(); const b = e.target.closest("button"); if (b) menuAction(b.dataset.action); });
-menu.addEventListener("click", e => { if (e.target === menu) closeMenu(true); });
-
-panel.addEventListener("pointerdown", e => { e.preventDefault(); if (e.target === panel) closePanel(true); }, { passive: false });
-panel.querySelector(".panel-card").addEventListener("pointerdown", e => e.stopPropagation(), { passive: false });
-panelClose.addEventListener("click", () => closePanel(false));
-
-document.addEventListener("pointerdown", e => {
-  if (e.pointerType === "mouse" && e.button !== 0) return;
-  if (menuOpen() || panelOpen() || !voiceGate.classList.contains("hidden")) return;
-  e.preventDefault();
-  longPressTriggered = false;
-  pressStart = { x: e.clientX, y: e.clientY, target: e.target };
-  clearTimeout(longPressTimer);
-  longPressTimer = setTimeout(() => {
-    longPressTriggered = true;
-    ignoreNextClickUntil = Date.now() + 650;
-    openMenu();
-    if (navigator.vibrate) navigator.vibrate(20);
-  }, LONG_PRESS_DELAY);
-}, { passive: false });
-document.addEventListener("pointermove", e => {
-  if (!pressStart) return;
-  const dx = e.clientX - pressStart.x, dy = e.clientY - pressStart.y;
-  if (Math.sqrt(dx * dx + dy * dy) > MOVE_CANCEL_DISTANCE) clearTimeout(longPressTimer);
-}, { passive: false });
-document.addEventListener("pointerup", e => {
-  if (!pressStart) return;
-  e.preventDefault();
-  clearTimeout(longPressTimer);
-  const target = pressStart.target;
-  pressStart = null;
-  if (Date.now() < ignoreNextClickUntil) { longPressTriggered = false; return; }
-  handleTapCandidate(target);
-}, { passive: false });
-document.addEventListener("pointercancel", () => { clearTimeout(longPressTimer); pressStart = null; }, { passive: false });
-document.addEventListener("click", e => { if (Date.now() < ignoreNextClickUntil) { e.preventDefault(); e.stopPropagation(); } }, true);
-
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) { clearTimeout(blinkTimer); clearTimeout(idleTimer); stopListeningOnly(); }
-  else { scheduleBlink(); scheduleIdle(); loadVoices(); }
-});
-window.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeMenu(true); closePanel(true); }
-  if (e.key.toLowerCase() === "m") openMenu();
-  if (e.key.toLowerCase() === "s") sleep();
-  if (e.key.toLowerCase() === "w") wake();
-  if (e.key.toLowerCase() === "l") startListening(false);
-  if (e.key.toLowerCase() === "r") forceIdle();
-});
-
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(() => {});
-}
-if ("caches" in window) {
-  caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(() => {});
-}
-
-applyMode(mode, true);
-ensureTimerTicker();
-setState("idle");
-scheduleBlink();
-scheduleIdle();
-setTimeout(() => showToast("v0.5-web. Нажми «Включить голос».", 2400), 700);
+unlockVoiceBtn.addEventListener('click',unlockVoice);skipVoiceBtn.addEventListener('click',()=>{voiceGate.classList.add('hidden');maybeStatus('Голос не разблокирован.',true,1800)});
+menu.addEventListener('pointerdown',e=>{if(e.target===menu){e.preventDefault();closeMenu(true)}},{passive:false});menuCard.addEventListener('pointerdown',e=>e.stopPropagation(),{passive:false});menuCard.addEventListener('click',e=>{e.stopPropagation();const b=e.target.closest('button');if(b)menuAction(b.dataset.action)});
+panel.addEventListener('pointerdown',e=>{if(e.target===panel){e.preventDefault();closePanel(true)}},{passive:false});panelCard.addEventListener('pointerdown',e=>e.stopPropagation(),{passive:false});panelCard.addEventListener('click',e=>{const b=e.target.closest('button[data-panel-action]');if(b)panelAction(b.dataset.panelAction)});panelClose.addEventListener('click',()=>closePanel(false));
+['contextmenu','selectstart','dragstart'].forEach(n=>document.addEventListener(n,e=>e.preventDefault()));
+document.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse'&&e.button!==0)return;if(menuOpen()||panelOpen()||!voiceGate.classList.contains('hidden'))return;e.preventDefault();longPressTriggered=false;pressStart={x:e.clientX,y:e.clientY,target:e.target};clearTimeout(longPressTimer);longPressTimer=setTimeout(()=>{longPressTriggered=true;ignoreNextClickUntil=Date.now()+650;openMenu();navigator.vibrate?.(20)},LONG_PRESS_DELAY)},{passive:false});
+document.addEventListener('pointermove',e=>{if(!pressStart)return;const dx=e.clientX-pressStart.x,dy=e.clientY-pressStart.y;if(Math.hypot(dx,dy)>MOVE_CANCEL_DISTANCE)clearTimeout(longPressTimer)},{passive:false});
+document.addEventListener('pointerup',e=>{if(!pressStart)return;e.preventDefault();clearTimeout(longPressTimer);const target=pressStart.target;pressStart=null;if(Date.now()<ignoreNextClickUntil){longPressTriggered=false;return}handleTapCandidate(target)},{passive:false});
+document.addEventListener('pointercancel',()=>{clearTimeout(longPressTimer);pressStart=null},{passive:false});document.addEventListener('click',e=>{if(Date.now()<ignoreNextClickUntil){e.preventDefault();e.stopPropagation()}},true);
+document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(blinkTimer);clearTimeout(idleTimer);stopListeningOnly()}else{scheduleBlink();scheduleIdle();loadVoices()}});
+if('serviceWorker'in navigator)navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{});if('caches'in window)caches.keys().then(ks=>ks.forEach(k=>caches.delete(k))).catch(()=>{});
+applyMode(mode,true);ensureTimerTicker();setState('idle');scheduleBlink();scheduleIdle();
