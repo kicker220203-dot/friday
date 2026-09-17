@@ -1,8 +1,8 @@
 {
-  "name": "Пятница v0.6.1-voice",
+  "name": "Пятница v0.7-ai",
   "short_name": "Пятница",
-  "description": "Friday web build with neural ElevenLabs voice through a protected backend",
-  "start_url": "./index.html?v=061voice",
+  "description": "Friday desktop AI: local commands, OpenAI conversation and ElevenLabs voices",
+  "start_url": "./index.html?v=07ai",
   "display": "standalone",
   "orientation": "landscape",
   "background_color": "#000000",
