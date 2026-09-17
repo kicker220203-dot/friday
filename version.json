@@ -1,7 +1,7 @@
 {
-  "version": "v0.5.1-stable",
-  "build": "051stable",
-  "stage": "web-stabilization",
+  "version": "v0.5.2-hotfix",
+  "build": "052hotfix",
+  "stage": "web-hotfix",
   "ai": "disabled_requires_backend_proxy",
   "features": [
     "voice_output",
@@ -13,5 +13,11 @@
     "tuesday_lite",
     "settings_panel",
     "diagnostics_toggle"
+  ],
+  "fixes": [
+    "silent_session_timeout",
+    "voice_command_synonyms",
+    "two_step_timer",
+    "settings_touch_selection"
   ]
 }
