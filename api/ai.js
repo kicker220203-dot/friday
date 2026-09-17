@@ -72,7 +72,7 @@ module.exports = async function handler(req, res) {
   const memoryText = memory.map(x => `- [${x.category}${x.topic ? `/${x.topic}` : ''}; ${x.importance}] ${x.content}`).join('\n');
   const input = `${historyText ? `Недавний диалог:\n${historyText}\n\n` : ''}Текущий режим приложения: ${mode}.\nНовая реплика Макса: ${message}`;
   const instructions = persona === 'tuesday' ? tuesdayInstructions() : fridayInstructions(memoryText);
-  const model = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
+  const model = process.env.OPENAI_MODEL || 'gpt-5.6-luna';
 
   try {
     const upstream = await fetch('https://api.openai.com/v1/responses', {
@@ -86,7 +86,9 @@ module.exports = async function handler(req, res) {
         instructions,
         input,
         store: false,
-        max_output_tokens: 260
+        reasoning: { effort: 'none' },
+        text: { verbosity: 'low' },
+        max_output_tokens: 220
       })
     });
 
