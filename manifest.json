@@ -1,8 +1,8 @@
 {
-  "name": "Пятница v0.6-voice",
+  "name": "Пятница v0.6.1-voice",
   "short_name": "Пятница",
   "description": "Friday web build with neural ElevenLabs voice through a protected backend",
-  "start_url": "./index.html?v=06voice",
+  "start_url": "./index.html?v=061voice",
   "display": "standalone",
   "orientation": "landscape",
   "background_color": "#000000",
