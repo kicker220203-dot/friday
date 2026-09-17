@@ -7,16 +7,16 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Пятница" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Пятница v0.5.1-stable</title>
-  <link rel="manifest" href="./manifest.json?v=051stable" />
+  <title>Пятница v0.5.2-hotfix</title>
+  <link rel="manifest" href="./manifest.json?v=052hotfix" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./style.css?v=051stable" />
+  <link rel="stylesheet" href="./style.css?v=052hotfix" />
 </head>
 <body>
-  <main id="stage" aria-label="Пятница v0.5.1-stable">
+  <main id="stage" aria-label="Пятница v0.5.2-hotfix">
     <section id="voiceGate" class="voice-gate">
       <div class="voice-card">
-        <div class="voice-title">Пятница v0.5.1-stable</div>
+        <div class="voice-title">Пятница v0.5.2-hotfix</div>
         <div class="voice-text">Нажми один раз, чтобы разблокировать голос на iPhone. Потом двойной тап запускает разговор.</div>
         <button type="button" id="unlockVoiceBtn">Включить голос</button>
         <button type="button" id="skipVoiceBtn" class="secondary">Продолжить без голоса</button>
@@ -36,7 +36,7 @@
 
     <aside id="menu" class="menu hidden" aria-hidden="true">
       <div class="menu-card" id="menuCard" role="dialog" aria-label="Меню Пятницы">
-        <div class="menu-title">Пятница v0.5.1-stable</div>
+        <div class="menu-title">Пятница v0.5.2-hotfix</div>
         <div class="menu-subtitle">Голос • Таймеры • Память • Настройки</div>
         <button type="button" data-action="listen">Слушать команду</button>
         <button type="button" data-action="memory">Память</button>
@@ -69,6 +69,7 @@
 
     <aside id="toast" class="toast hidden" aria-live="polite"></aside>
   </main>
-  <script src="./app.js?v=051stable"></script>
+  <script src="./app.js?v=052hotfix"></script>
+  <script src="./hotfix.js?v=052hotfix"></script>
 </body>
 </html>
