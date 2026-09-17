@@ -16,19 +16,25 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
 
   const apiKey = process.env.ELEVENLABS_API_KEY;
-  const fridayVoice = process.env.ELEVENLABS_FRIDAY_VOICE_ID;
-  const tuesdayVoice = process.env.ELEVENLABS_TUESDAY_VOICE_ID || fridayVoice;
-  if (!apiKey || !fridayVoice) {
-    return res.status(503).json({ error: 'voice_backend_not_configured' });
+  if (!apiKey) return res.status(503).json({ error: 'voice_backend_not_configured' });
+
+  let body = req.body || {};
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body || '{}'); }
+    catch { return res.status(400).json({ error: 'invalid_json' }); }
   }
 
-  const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
   const text = String(body.text || '').trim();
   const persona = body.persona === 'tuesday' ? 'tuesday' : 'friday';
+  const selectedVoice = String(body.voiceId || '').trim();
+  const fridayVoice = process.env.ELEVENLABS_FRIDAY_VOICE_ID || '';
+  const tuesdayVoice = process.env.ELEVENLABS_TUESDAY_VOICE_ID || fridayVoice;
+  const voiceId = selectedVoice || (persona === 'tuesday' ? tuesdayVoice : fridayVoice);
+
   if (!text) return res.status(400).json({ error: 'text_required' });
   if (text.length > 1200) return res.status(413).json({ error: 'text_too_long' });
+  if (!voiceId) return res.status(400).json({ error: 'voice_required' });
 
-  const voiceId = persona === 'tuesday' ? tuesdayVoice : fridayVoice;
   const modelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5';
   const voiceSettings = persona === 'tuesday'
     ? { stability: 0.58, similarity_boost: 0.78, style: 0.05, use_speaker_boost: true, speed: 0.96 }
